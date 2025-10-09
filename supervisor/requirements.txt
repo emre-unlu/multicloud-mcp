@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+pydantic>=2
+python-dotenv
+requests
+langchain
+langchain-core
+langchain-community
+langchain-openai
+# or use Ollama locally:
+# langchain-ollama
