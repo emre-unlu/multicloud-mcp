@@ -1,49 +1,43 @@
 # supervisor/app.py
-import traceback
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
-from dotenv import load_dotenv
-from .agents import build_agent
+from langchain.messages import HumanMessage, AIMessage
+from .agents import build_agent_v1
 
-load_dotenv()
-app = FastAPI(title="Supervisor (LangChain)")
-
+app = FastAPI()
 _agent = None
-_agent_error = None
 
-def get_agent():
-    global _agent, _agent_error
-    if _agent or _agent_error:
-        return _agent
-    try:
-        _agent = build_agent()
-    except Exception as e:
-        _agent_error = f"{type(e).__name__}: {e}"
-        traceback.print_exc()
-    if _agent is None and _agent_error is None:
-        _agent_error = "build_agent() returned None without raising"
-    return _agent
-
-class RunIn(BaseModel):
+class RunReq(BaseModel):
     goal: str
 
-class RunOut(BaseModel):
-    answer: str
+def get_agent():
+    global _agent
+    if _agent is None:
+        _agent = build_agent_v1()
+    return _agent
 
 @app.get("/health")
 def health():
-    ag = get_agent()
-    return {"ok": ag is not None, "error": _agent_error}
-
-@app.post("/run", response_model=RunOut)
-def run(req: RunIn):
-    ag = get_agent()
-    if ag is None:
-        return RunOut(answer=f"Agent failed to initialize: {_agent_error}")
     try:
-        # No agent_scratchpad here
-        res = ag.invoke({"input": req.goal})
-        return RunOut(answer=res.get("output", str(res)))
+        get_agent()
+        return {"ok": True}
     except Exception as e:
-        traceback.print_exc()
-        return RunOut(answer=f"Error: {type(e).__name__}: {e}")
+        return {"ok": False, "error": str(e)}
+
+@app.post("/run")
+def run(req: RunReq):
+    agent = get_agent()
+    result = agent.invoke({
+        "messages": [
+            {"role": "user", "content": req.goal}
+        ]
+    })
+    # result is usually a dict with "messages" (LangChain v1)
+    messages = result.get("messages", [])
+    # take the last AI message
+    last_text = ""
+    for m in reversed(messages):
+        if isinstance(m, AIMessage) or (isinstance(m, dict) and m.get("role") == "assistant"):
+            last_text = m.get("content") if isinstance(m, dict) else m.content
+            break
+    return {"ok": True, "answer": last_text or "(no final answer)"}

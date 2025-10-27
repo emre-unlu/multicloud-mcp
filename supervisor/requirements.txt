@@ -6,6 +6,4 @@ requests
 langchain
 langchain-core
 langchain-community
-langchain-openai
-# or use Ollama locally:
-# langchain-ollama
+langchain-ollama
