@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MCP K8s Supervisor – UI</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-50 text-slate-900">
+  <div class="max-w-5xl mx-auto p-6">
+    <header class="mb-6">
+      <h1 class="text-2xl font-bold">Kubernetes Supervisor – Demo UI</h1>
+      <p class="text-sm text-slate-600">Send goals to the Supervisor via <code>/api/run</code>.</p>
+    </header>
+
+    <section class="mb-4 grid gap-3 md:grid-cols-3">
+      <label class="block">
+        <span class="text-xs font-medium">Namespace (optional)</span>
+        <input id="ns" type="text" placeholder="default or demo"
+               class="mt-1 w-full rounded-lg border border-slate-300 p-2 focus:ring-2 focus:ring-indigo-500" />
+      </label>
+      <div class="flex items-end gap-3">
+        <button id="btnNsDefault" class="rounded-lg border px-3 py-2 text-sm hover:bg-slate-100">Use default</button>
+        <button id="btnNsDemo" class="rounded-lg border px-3 py-2 text-sm hover:bg-slate-100">Use demo</button>
+      </div>
+      <div class="flex items-end">
+        <button id="btnHealth" class="rounded-lg border px-3 py-2 text-sm hover:bg-slate-100">Check health</button>
+      </div>
+    </section>
+
+    <section class="mb-4 rounded-2xl border bg-white p-4 shadow-sm">
+      <label class="block mb-2 text-xs font-medium">Goal / Instruction</label>
+      <textarea id="goal" rows="4" placeholder="List Kubernetes namespaces"
+        class="w-full rounded-lg border border-slate-300 p-3 focus:ring-2 focus:ring-indigo-500"></textarea>
+      <div class="mt-3 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <label class="inline-flex items-center gap-2 text-sm">
+            <input id="showRaw" type="checkbox" class="h-4 w-4" />
+            Show raw JSON
+          </label>
+          <p class="text-xs text-slate-500">Tip: <kbd class="px-1 rounded bg-slate-100 border">Ctrl</kbd>+<kbd class="px-1 rounded bg-slate-100 border">Enter</kbd> to send</p>
+        </div>
+        <div class="flex gap-2">
+          <button id="btnListNs" class="rounded-lg border px-3 py-2 text-sm hover:bg-slate-100">List namespaces</button>
+          <button id="send" class="rounded-lg bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700">Send</button>
+        </div>
+      </div>
+    </section>
+
+    <div class="grid gap-4 md:grid-cols-2">
+      <section class="rounded-2xl border bg-white p-4 shadow-sm">
+        <h2 class="mb-2 text-sm font-semibold">Response</h2>
+        <div id="answer" class="prose max-w-none whitespace-pre-wrap text-sm text-slate-800"></div>
+        <pre id="raw" class="mt-3 hidden rounded-lg bg-slate-50 p-3 text-xs overflow-auto"></pre>
+      </section>
+      <section class="rounded-2xl border bg-white p-4 shadow-sm">
+        <div class="mb-2 flex items-center justify-between">
+          <h2 class="text-sm font-semibold">History</h2>
+          <button id="clearHistory" class="text-xs text-slate-500 hover:underline">Clear</button>
+        </div>
+        <ul id="history" class="space-y-2 text-sm"></ul>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    const api = {
+      async run(goal) {
+        const res = await fetch("/api/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ goal })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      },
+      async health() {
+        const r = await fetch("/api/health");
+        return r.json();
+      }
+    };
+
+    const $ = (id) => document.getElementById(id);
+    const state = { history: JSON.parse(localStorage.getItem("hist") || "[]") };
+
+    function saveHistory() { localStorage.setItem("hist", JSON.stringify(state.history.slice(0,30))); }
+    function renderHistory() {
+      const ul = $("history"); ul.innerHTML = "";
+      state.history.forEach(h => {
+        const li = document.createElement("li");
+        li.className = "rounded-lg border p-2 hover:bg-slate-50 cursor-pointer";
+        li.innerHTML = `<div class="font-medium">${escapeHtml(h.goal)}</div>
+                        <div class="text-xs text-slate-500">${new Date(h.t).toLocaleString()}</div>`;
+        li.onclick = () => { $("goal").value = h.goal; send(); };
+        ul.appendChild(li);
+      });
+    }
+    function escapeHtml(s){return s.replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+    function toggleLoading(on){ $("send").disabled=on; $("send").textContent=on?"Sending…":"Send"; }
+
+    async function send() {
+      let goal = $("goal").value.trim();
+      const ns = $("ns").value.trim();
+      if (!goal) { alert("Type a goal"); return; }
+      if (ns) goal += `\n\n(Use namespace: ${ns})`;
+      toggleLoading(true); $("answer").textContent=""; $("raw").textContent="";
+      try {
+        const data = await api.run(goal);
+        $("answer").textContent = data.answer || JSON.stringify(data,null,2);
+        $("raw").textContent = JSON.stringify(data,null,2);
+        state.history.unshift({goal, t: Date.now()}); saveHistory(); renderHistory();
+      } catch (e) {
+        $("answer").textContent = "Request failed: " + e.message;
+      } finally { toggleLoading(false); }
+    }
+
+    $("send").onclick = send;
+    $("btnListNs").onclick = () => { $("goal").value = "List Kubernetes namespaces"; send(); };
+    $("btnNsDefault").onclick = () => { $("ns").value = "default"; };
+    $("btnNsDemo").onclick = () => { $("ns").value = "demo"; };
+    $("btnHealth").onclick = async () => {
+      const h = await api.health();
+      $("answer").textContent = `Health: ${JSON.stringify(h)}`;
+    };
+    $("clearHistory").onclick = () => { state.history=[]; saveHistory(); renderHistory(); };
+    $("showRaw").onchange = (e) => { $("raw").classList.toggle("hidden", !e.target.checked); };
+    document.addEventListener("keydown", e => { if (e.key==="Enter" && (e.ctrlKey||e.metaKey)) send(); });
+
+    renderHistory();
+  </script>
+</body>
+</html>
