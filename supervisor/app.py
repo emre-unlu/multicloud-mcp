@@ -1,14 +1,20 @@
-# supervisor/app.py
-from fastapi import FastAPI, Request
+"""FastAPI surface for the Supervisor agent."""
+
+from __future__ import annotations
+
+from fastapi import FastAPI
+from langchain.messages import AIMessage, HumanMessage
 from pydantic import BaseModel
-from langchain.messages import HumanMessage, AIMessage
+
 from .agents import build_agent_v1
 
 app = FastAPI()
 _agent = None
 
+
 class RunReq(BaseModel):
     goal: str
+
 
 def get_agent():
     global _agent
@@ -16,28 +22,31 @@ def get_agent():
         _agent = build_agent_v1()
     return _agent
 
+
 @app.get("/health")
 def health():
     try:
         get_agent()
-        return {"ok": True}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    except Exception as exc:  # pragma: no cover - surfaced via API
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True}
+
 
 @app.post("/run")
 def run(req: RunReq):
     agent = get_agent()
-    result = agent.invoke({
-        "messages": [
-            {"role": "user", "content": req.goal}
-        ]
-    })
-    # result is usually a dict with "messages" (LangChain v1)
-    messages = result.get("messages", [])
-    # take the last AI message
-    last_text = ""
-    for m in reversed(messages):
-        if isinstance(m, AIMessage) or (isinstance(m, dict) and m.get("role") == "assistant"):
-            last_text = m.get("content") if isinstance(m, dict) else m.content
-            break
-    return {"ok": True, "answer": last_text or "(no final answer)"}
+    result = agent.invoke({"messages": [HumanMessage(content=req.goal)]})
+
+    # `create_agent` returns a dict containing `output` and `messages`.
+    answer = result.get("output")
+    if not answer:
+        messages = result.get("messages", [])
+        for message in reversed(messages):
+            if isinstance(message, AIMessage):
+                answer = message.content
+                break
+            if isinstance(message, dict) and message.get("role") == "assistant":
+                answer = message.get("content")
+                break
+
+    return {"ok": True, "answer": answer or "(no final answer)"}
