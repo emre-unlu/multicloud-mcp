@@ -9,6 +9,8 @@ from typing import Any, Dict, Iterable, Optional
 import requests
 from langchain.agents import create_agent
 from langchain.tools import BaseTool, tool
+from langgraph.checkpoint.memory import InMemorySaver
+from langchain.agents.middleware import HumanInTheLoopMiddleware
 
 try:
     from langchain.tools import StructuredTool
@@ -22,6 +24,19 @@ except ImportError:  # pragma: no cover - package optional
 K8S_MCP_URL = os.getenv("K8S_MCP_URL", "http://127.0.0.1:8080")
 HDRS = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
 _SESSION = requests.Session()
+CHECKPOINTER = InMemorySaver()
+HITL_POLICY: Dict[str, Any] = {
+    "k8s_create_deployment": True,
+    "k8s_scale_deployment": True,
+    # Read-only operations remain automatic.
+    "k8s_list_namespaces": False,
+    "k8s_list_pods": False,
+    "k8s_pod_logs": False,
+    # Diagnostics may surface sensitive data but are safe to approve/reject.
+    "k8s_diagnose_cluster": {"allowed_decisions": ["approve", "reject"]},
+    # Optional namespace lookup tool if present.
+    "k8s_get_namespace": {"allowed_decisions": ["approve", "reject", "edit"]},
+}
 
 
 def _post_mcp(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -175,5 +190,11 @@ def build_agent_v1() -> Any:
         model=llm,
         tools=tools,
         system_prompt=SYSTEM_PROMPT,
-        # Future: middleware=[]  # guardrails, approvals, logging, etc.
+        middleware=[
+            HumanInTheLoopMiddleware(
+                interrupt_on=HITL_POLICY,
+                description_prefix="Tool execution pending approval",
+            )
+        ],
+        checkpointer=CHECKPOINTER,
     )

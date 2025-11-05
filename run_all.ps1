@@ -15,9 +15,13 @@ if (-not $ollamaProc) {
     Start-Sleep -Seconds 3
 }
 
-# Pull the model
-Write-Host "Pulling Ollama model..." -ForegroundColor Yellow
-ollama pull llama3.1:8b
+# Pull the model only if it's not already present
+if (-not (ollama list | Select-String -Pattern '^llama3\.1:8b(\s|$)')) {
+    Write-Host "Model not found locally. Pulling..." -ForegroundColor Yellow
+    ollama pull llama3.1:8b
+} else {
+    Write-Host "Model llama3.1:8b already present. Skipping pull." -ForegroundColor Green
+}
 
 # Start K8s MCP Server
 Write-Host "Starting Kubernetes MCP Server..." -ForegroundColor Yellow

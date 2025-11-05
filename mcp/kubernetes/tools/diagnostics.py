@@ -1,6 +1,4 @@
-"""
-Monitoring and diagnostics module for Kubernetes.
-"""
+
 
 import logging
 import re
@@ -21,7 +19,7 @@ if TYPE_CHECKING:
 
 
 class KubernetesDiagnostics:
-    """Monitoring and diagnostics for Kubernetes."""
+    
 
     def __init__(self) -> None:
         """Initialize Kubernetes clients."""
@@ -429,6 +427,5 @@ class KubernetesDiagnostics:
 def register(mcp: "FastMCP") -> None:
     @mcp.tool()
     def diagnose_cluster(namespace: Optional[str] = None, include_metrics: bool = False) -> Dict[str, Any]:
-        """Summarize cluster health, optionally focusing on a namespace with metrics."""
         diagnostics = KubernetesDiagnostics()
         return diagnostics.cluster_overview(namespace=namespace, include_metrics=include_metrics)
