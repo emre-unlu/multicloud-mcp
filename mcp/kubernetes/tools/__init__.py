@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Callable, List
 from . import (
     create_deployment,
     diagnostics,
+    delete_deployment,
+    delete_pod,
     list_namespaces,
     list_pods,
     pod_logs,
@@ -23,6 +25,8 @@ _REGISTRARS: List[Callable[["FastMCP"], None]] = [
     create_deployment.register,
     scale_deployment.register,
     diagnostics.register,
+    delete_deployment.register,
+    delete_pod.register,
 ]
 
 

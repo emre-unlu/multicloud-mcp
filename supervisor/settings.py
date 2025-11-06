@@ -16,5 +16,7 @@ ALLOWED_TOOLS = {
         "pod_logs",
         "create_deployment",
         "scale_deployment",
+        "delete_deployment",
+        "delete_pod",
     }
 }

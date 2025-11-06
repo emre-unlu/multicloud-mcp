@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $PSStyle.OutputRendering = "Ansi"
 
 # Base paths
-$RepoRoot = "C:\multicloud-mcp"
+$RepoRoot = "D:\multicloud-mcp"
 $K8sDir = Join-Path $RepoRoot "mcp\kubernetes"
 $SupDir = Join-Path $RepoRoot "supervisor"
 

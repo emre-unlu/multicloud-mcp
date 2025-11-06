@@ -28,13 +28,12 @@ CHECKPOINTER = InMemorySaver()
 HITL_POLICY: Dict[str, Any] = {
     "k8s_create_deployment": True,
     "k8s_scale_deployment": True,
-    # Read-only operations remain automatic.
+    "k8s_delete_deployment": True,
+    "k8s_delete_pod": True,
     "k8s_list_namespaces": False,
     "k8s_list_pods": False,
     "k8s_pod_logs": False,
-    # Diagnostics may surface sensitive data but are safe to approve/reject.
     "k8s_diagnose_cluster": {"allowed_decisions": ["approve", "reject"]},
-    # Optional namespace lookup tool if present.
     "k8s_get_namespace": {"allowed_decisions": ["approve", "reject", "edit"]},
 }
 
@@ -120,6 +119,24 @@ def _build_tools() -> Iterable[BaseTool]:
             replicas=replicas,
         )
 
+    def delete_deployment(namespace: str, name: str, grace_period_seconds: Optional[int] = None) -> str:
+        """Delete a deployment after confirming namespace/name."""
+        return _call_mcp_json(
+            "delete_deployment",
+            namespace=namespace,
+            name=name,
+            grace_period_seconds=grace_period_seconds,
+        )
+
+    def delete_pod(namespace: str, name: str, grace_period_seconds: Optional[int] = None) -> str:
+        """Delete a pod and scale the owning deployment down when applicable."""
+        return _call_mcp_json(
+            "delete_pod",
+            namespace=namespace,
+            name=name,
+            grace_period_seconds=grace_period_seconds,
+        )
+
     def diagnose_cluster(namespace: Optional[str] = None, include_metrics: bool = False) -> str:
         """Summarize cluster health, optionally focusing on a namespace and metrics."""
         return _call_mcp_json(
@@ -155,6 +172,16 @@ def _build_tools() -> Iterable[BaseTool]:
             description=scale_deployment.__doc__ or "",
         ),
         wrap(
+            delete_deployment,
+            name="k8s_delete_deployment",
+            description=delete_deployment.__doc__ or "",
+        ),
+        wrap(
+            delete_pod,
+            name="k8s_delete_pod",
+            description=delete_pod.__doc__ or "",
+        ),
+        wrap(
             diagnose_cluster,
             name="k8s_diagnose_cluster",
             description=diagnose_cluster.__doc__ or "",
@@ -164,7 +191,7 @@ def _build_tools() -> Iterable[BaseTool]:
 
 SYSTEM_PROMPT = """You are the Supervisor agent. Plan briefly, then call tools.
 - Prefer read/list actions first.
-- Never delete/terminate resources.
+- Only delete resources after explicit human approval.
 - When creating/scaling, always specify namespace and replica count.
 - Use diagnostics to gather cluster health before risky operations.
 - If ambiguous, ask ONE short clarifying question.

@@ -16,7 +16,7 @@ logging.basicConfig(stream=sys.stderr, level=logging.INFO)
 def _build_mcp() -> FastMCP:
     instance = FastMCP(
         name="kubernetes-mcp",
-        instructions="Safe Kubernetes tools (no delete).",
+        instructions="Safe Kubernetes tools (deletions require human approval).",
     )
     register_all(instance)
     return instance
