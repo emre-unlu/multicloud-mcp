@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $PSStyle.OutputRendering = "Ansi"
 
 # Base paths
-$RepoRoot = "D:\multicloud-mcp"
+$RepoRoot = "C:\github\multicloud-mcp"
 $K8sDir = Join-Path $RepoRoot "mcp\kubernetes"
 $SupDir = Join-Path $RepoRoot "supervisor"
 
@@ -16,37 +16,38 @@ if (-not $ollamaProc) {
 }
 
 # Pull the model only if it's not already present
-if (-not (ollama list | Select-String -Pattern '^llama3\.1:8b(\s|$)')) {
-    Write-Host "Model not found locally. Pulling..." -ForegroundColor Yellow
-    ollama pull llama3.1:8b
+if (-not (ollama list | Select-String -Pattern '^gpt-oss:20b(\s|$)')) {
+    Write-Host "Model not found locally. Pulling gpt-oss:20b..." -ForegroundColor Yellow
+    ollama pull gpt-oss:20b
 } else {
-    Write-Host "Model llama3.1:8b already present. Skipping pull." -ForegroundColor Green
+    Write-Host "Model gpt-oss:20b already present. Skipping pull." -ForegroundColor Green
 }
 
 # Start K8s MCP Server
 Write-Host "Starting Kubernetes MCP Server..." -ForegroundColor Yellow
 $k8sCmd = @"
 Set-Location '$K8sDir'
-& '${K8sDir}\.venv\Scripts\Activate.ps1'
-python server.py
+& '${K8sDir}\.venv\Scripts\python.exe' server.py
+Read-Host "Press Enter to exit"
 "@
-Start-Process -WindowStyle Normal -FilePath "powershell" -ArgumentList "-Command", $k8sCmd
+Start-Process -WindowStyle Normal -FilePath "powershell" -ArgumentList "-ExecutionPolicy Bypass -Command", $k8sCmd
 
 # Start Supervisor
 Write-Host "Starting Supervisor..." -ForegroundColor Yellow
 $supCmd = @"
 Set-Location '$RepoRoot'
-& '${SupDir}\.venv\Scripts\Activate.ps1'
-`$env:MODEL = 'ollama:llama3.1:8b'
-uvicorn supervisor.app:app --reload --port 9000
+`$env:MODEL = 'ollama:gpt-oss:20b'
+& '${SupDir}\.venv\Scripts\uvicorn.exe' supervisor.app:app --reload --port 9000
+Read-Host "Press Enter to exit"
 "@
-Start-Process -WindowStyle Normal -FilePath "powershell" -ArgumentList "-Command", $supCmd
+Start-Process -WindowStyle Normal -FilePath "powershell" -ArgumentList "-ExecutionPolicy Bypass -Command", $supCmd
 
 # Start Go UI Server
 Write-Host "Starting UI Server..." -ForegroundColor Yellow
 $uiCmd = @"
 Set-Location '$RepoRoot\app'
 go run .
+Read-Host "Press Enter to exit"
 "@
 Start-Process -WindowStyle Normal -FilePath "powershell" -ArgumentList "-Command", $uiCmd
 
