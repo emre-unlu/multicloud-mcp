@@ -1,7 +1,9 @@
-"""Tooling and agent wiring for the Supervisor service."""
+
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -42,7 +44,6 @@ HITL_POLICY: Dict[str, Any] = {
     "k8s_pod_logs": False,
     "k8s_pod_events": False,
     "k8s_run_diagnostics": False,
-    "k8s_diagnose_cluster": False,
     "k8s_get_namespace": False,
 }
 
@@ -52,6 +53,9 @@ DIAGNOSTICS_TOOL_ALLOWLIST = {
     "k8s_list_pods",
     "k8s_pod_events",
     "k8s_pod_logs",
+    
+}
+SUPERVISOR_TOOL_DENYLIST = {
     "k8s_diagnose_cluster",
 }
 
@@ -76,6 +80,7 @@ Never attempt to mutate the cluster or guess. If information is missing, say so 
 summary and recommendations."""
 
 _DIAGNOSTICS_AGENT = None
+_DEFAULT_SIGNATURE_SECRET = "diagnostics-worker-signing-key"
 
 
 def _post_mcp(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -201,14 +206,7 @@ def _build_tools(allowed_names: Optional[Iterable[str]] = None) -> Iterable[Base
             name=name,
             grace_period_seconds=grace_period_seconds,
         )
-
-    def diagnose_cluster(namespace: Optional[str] = None, include_metrics: bool = False) -> str:
-        """Summarize cluster health, optionally focusing on a namespace and metrics."""
-        return _call_mcp_json(
-            "diagnose_cluster",
-            namespace=namespace,
-            include_metrics=include_metrics,
-        )
+    
 
     def run_diagnostics(
         goal: str,
@@ -236,14 +234,19 @@ def _build_tools(allowed_names: Optional[Iterable[str]] = None) -> Iterable[Base
         ("k8s_scale_deployment", scale_deployment, scale_deployment.__doc__ or ""),
         ("k8s_delete_deployment", delete_deployment, delete_deployment.__doc__ or ""),
         ("k8s_delete_pod", delete_pod, delete_pod.__doc__ or ""),
-        ("k8s_diagnose_cluster", diagnose_cluster, diagnose_cluster.__doc__ or ""),
         ("k8s_run_diagnostics", run_diagnostics, run_diagnostics.__doc__ or ""),
     ]
 
     tools: List[BaseTool] = []
     for name, fn, description in tool_specs:
+       
         if allowed is not None and name not in allowed:
             continue
+
+        
+        if allowed is None and name in SUPERVISOR_TOOL_DENYLIST:
+            continue
+
         tools.append(wrap(fn, name=name, description=description))
     return tools
 
@@ -276,7 +279,7 @@ def _extract_answer(payload: Dict[str, Any]) -> str:
 def _get_diagnostics_agent():
     global _DIAGNOSTICS_AGENT
     if _DIAGNOSTICS_AGENT is None:
-        diag_model = os.getenv("DIAGNOSTICS_MODEL")
+        diag_model = os.getenv("DIAGNOSTICS_MODEL", "ollama:gpt-oss:20b")
         tools = list(_build_tools(allowed_names=DIAGNOSTICS_TOOL_ALLOWLIST))
         _DIAGNOSTICS_AGENT = create_agent(
             model=_build_llm(diag_model),
@@ -314,8 +317,7 @@ def _run_diagnostics_worker(
     config = {"configurable": {"thread_id": f"diag-{uuid4()}"}}
     result = worker.invoke({"messages": [HumanMessage(content="\n".join(lines))]}, config=config)
     logger.info("[DIAG-AGENT] diagnose_cluster() called")
-    return _extract_answer(result)
-
+    return _attach_worker_signatures(_extract_answer(result))
 
 SYSTEM_PROMPT = """You are the Supervisor agent. Plan briefly, then call tools.
 - Prefer read/list actions first.
@@ -342,3 +344,18 @@ def build_agent_v1() -> Any:
         ],
         checkpointer=CHECKPOINTER,
     )
+
+def _attach_worker_signatures(answer: str) -> str:
+    """Append deterministic signatures so responses can be verified."""
+    payload = answer or ""
+    secret = os.getenv("WORKER_SIGNATURE_SECRET", _DEFAULT_SIGNATURE_SECRET).encode("utf-8")
+    body = payload.encode("utf-8")
+    hmac_sha256 = hmac.new(secret, body, hashlib.sha256).hexdigest()
+    blake2s_sig = hashlib.blake2s(body + secret).hexdigest()
+    signature_block = (
+        "\n\n---\n"
+        "Worker agent signatures:\n"
+        f"- hmac_sha256: {hmac_sha256}\n"
+        f"- blake2s: {blake2s_sig}\n"
+    )
+    return payload.rstrip("\n") + signature_block

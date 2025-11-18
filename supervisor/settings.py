@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
-MODEL = os.getenv("MODEL", "ollama:llama3.1:8b")
+MODEL = os.getenv("MODEL", "ollama:gpt-oss:20b")
 
 
 MCP_SERVERS = {
