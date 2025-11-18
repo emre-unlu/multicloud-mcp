@@ -14,11 +14,11 @@ from langchain.agents.middleware import HumanInTheLoopMiddleware
 
 try:
     from langchain.tools import StructuredTool
-except ImportError:  # pragma: no cover - older LangChain versions
+except ImportError:  
     StructuredTool = None
 try:
     from langchain_ollama import ChatOllama
-except ImportError:  # pragma: no cover - package optional
+except ImportError:  
     ChatOllama = None
 
 K8S_MCP_URL = os.getenv("K8S_MCP_URL", "http://127.0.0.1:8080")
@@ -200,7 +200,7 @@ SYSTEM_PROMPT = """You are the Supervisor agent. Plan briefly, then call tools.
 
 def build_agent_v1() -> Any:
     """Create the LangChain agent wired up with MCP-backed tools."""
-    model_spec = os.getenv("MODEL", "ollama:llama3.1:8b")
+    model_spec = os.getenv("MODEL", "ollama:gpt-oss:20b")
     tools = list(_build_tools())
     llm = model_spec
     if model_spec.startswith("ollama:"):
@@ -210,7 +210,7 @@ def build_agent_v1() -> Any:
                 "Install with `pip install langchain-ollama`."
             )
         _, _, remaining = model_spec.partition(":")
-        model_name = remaining or "llama3.1:8b"
+        model_name = remaining or "ollama:gpt-oss:20b"
         base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
         llm = ChatOllama(model=model_name, base_url=base_url)
     return create_agent(
