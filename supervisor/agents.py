@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, List, Optional
+from uuid import uuid4
 
 import requests
 from langchain.agents import create_agent
 from langchain.tools import BaseTool, tool
 from langgraph.checkpoint.memory import InMemorySaver
 from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langchain.messages import AIMessage, HumanMessage
 
 try:
     from langchain.tools import StructuredTool
@@ -25,17 +27,52 @@ K8S_MCP_URL = os.getenv("K8S_MCP_URL", "http://127.0.0.1:8080")
 HDRS = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
 _SESSION = requests.Session()
 CHECKPOINTER = InMemorySaver()
+DIAGNOSTICS_CHECKPOINTER = InMemorySaver()
 HITL_POLICY: Dict[str, Any] = {
     "k8s_create_deployment": True,
     "k8s_scale_deployment": True,
     "k8s_delete_deployment": True,
     "k8s_delete_pod": True,
     "k8s_list_namespaces": False,
+    "k8s_list_nodes": False,
     "k8s_list_pods": False,
     "k8s_pod_logs": False,
+    "k8s_pod_events": False,
+    "k8s_run_diagnostics": False,
     "k8s_diagnose_cluster": {"allowed_decisions": ["approve", "reject"]},
     "k8s_get_namespace": {"allowed_decisions": ["approve", "reject", "edit"]},
 }
+
+DIAGNOSTICS_TOOL_ALLOWLIST = {
+    "k8s_list_nodes",
+    "k8s_list_namespaces",
+    "k8s_list_pods",
+    "k8s_pod_events",
+    "k8s_pod_logs",
+    "k8s_diagnose_cluster",
+}
+
+DIAGNOSTICS_SYSTEM_PROMPT = """You are the Kubernetes diagnostics worker agent.
+You only have read-only access to Kubernetes MCP tools. Follow this workflow:
+1. Understand the requested scope (cluster, namespace, workload) and key symptoms.
+2. List cluster nodes and verify Ready status.
+3. Enumerate namespaces/pods in scope. Focus on pods that are Pending, CrashLoopBackOff,
+   ImagePullBackOff, Error, Terminating, or repeatedly restarting.
+4. Inspect events and, when requested, recent logs for a handful of the most relevant
+   problematic pods (respect the max pods hint).
+5. Summarize the findings, highlighting node issues, namespace-wide problems, or
+   workload-specific failures.
+6. Provide concrete recommendations tied to the issues discovered.
+
+Always produce a final answer that contains:
+- A human readable summary section with concise bullet points.
+- A "Structured JSON" block whose JSON object has the keys
+  "overall_status", "issues", and "recommendations".
+
+Never attempt to mutate the cluster or guess. If information is missing, say so in the
+summary and recommendations."""
+
+_DIAGNOSTICS_AGENT = None
 
 
 def _post_mcp(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -76,8 +113,25 @@ def _call_mcp_json(tool_name: str, **arguments: Any) -> str:
     return json.dumps(data, indent=2, ensure_ascii=False)
 
 
-def _build_tools() -> Iterable[BaseTool]:
+def _build_llm(model_spec: Optional[str] = None) -> Any:
+    spec = model_spec or os.getenv("MODEL", "ollama:gpt-oss:20b")
+    llm: Any = spec
+    if spec.startswith("ollama:"):
+        if ChatOllama is None:
+            raise RuntimeError(
+                "MODEL is set to an Ollama backend but langchain_ollama is not installed. "
+                "Install with `pip install langchain-ollama`."
+            )
+        _, _, remaining = spec.partition(":")
+        model_name = remaining or "ollama:gpt-oss:20b"
+        base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+        llm = ChatOllama(model=model_name, base_url=base_url)
+    return llm
+
+
+def _build_tools(allowed_names: Optional[Iterable[str]] = None) -> Iterable[BaseTool]:
     """Construct LangChain tools that proxy to MCP endpoints."""
+    allowed = set(allowed_names) if allowed_names is not None else None
 
     def wrap(fn, *, name: str, description: str) -> BaseTool:
         if StructuredTool is not None:
@@ -88,6 +142,10 @@ def _build_tools() -> Iterable[BaseTool]:
         decorated.description = description
         return decorated
 
+    def list_nodes() -> str:
+        """List Kubernetes nodes and readiness state."""
+        return _call_mcp_json("list_nodes")
+
     def list_namespaces() -> str:
         """List Kubernetes namespaces."""
         return _call_mcp_json("list_namespaces")
@@ -95,6 +153,10 @@ def _build_tools() -> Iterable[BaseTool]:
     def list_pods(namespace: str) -> str:
         """List pod names in a namespace."""
         return _call_mcp_json("list_pods", namespace=namespace)
+
+    def pod_events(namespace: str, pod: str) -> str:
+        """List recent events for a pod."""
+        return _call_mcp_json("pod_events", namespace=namespace, pod=pod)
 
     def pod_logs(namespace: str, pod: str, tail_lines: int = 80) -> str:
         """Get recent pod logs."""
@@ -145,48 +207,110 @@ def _build_tools() -> Iterable[BaseTool]:
             include_metrics=include_metrics,
         )
 
-    return [
-        wrap(
-            list_namespaces,
-            name="k8s_list_namespaces",
-            description=list_namespaces.__doc__ or "",
-        ),
-        wrap(
-            list_pods,
-            name="k8s_list_pods",
-            description=list_pods.__doc__ or "",
-        ),
-        wrap(
-            pod_logs,
-            name="k8s_pod_logs",
-            description=pod_logs.__doc__ or "",
-        ),
-        wrap(
-            create_deployment,
-            name="k8s_create_deployment",
-            description=create_deployment.__doc__ or "",
-        ),
-        wrap(
-            scale_deployment,
-            name="k8s_scale_deployment",
-            description=scale_deployment.__doc__ or "",
-        ),
-        wrap(
-            delete_deployment,
-            name="k8s_delete_deployment",
-            description=delete_deployment.__doc__ or "",
-        ),
-        wrap(
-            delete_pod,
-            name="k8s_delete_pod",
-            description=delete_pod.__doc__ or "",
-        ),
-        wrap(
-            diagnose_cluster,
-            name="k8s_diagnose_cluster",
-            description=diagnose_cluster.__doc__ or "",
-        ),
+    def run_diagnostics(
+        goal: str,
+        namespace: Optional[str] = None,
+        workload: Optional[str] = None,
+        include_logs: bool = True,
+        max_pods: int = 3,
+    ) -> str:
+        """Delegate to the diagnostics worker for a scoped investigation."""
+        return _run_diagnostics_worker(
+            goal=goal,
+            namespace=namespace,
+            workload=workload,
+            include_logs=include_logs,
+            max_pods=max_pods,
+        )
+
+    tool_specs = [
+        ("k8s_list_nodes", list_nodes, list_nodes.__doc__ or ""),
+        ("k8s_list_namespaces", list_namespaces, list_namespaces.__doc__ or ""),
+        ("k8s_list_pods", list_pods, list_pods.__doc__ or ""),
+        ("k8s_pod_events", pod_events, pod_events.__doc__ or ""),
+        ("k8s_pod_logs", pod_logs, pod_logs.__doc__ or ""),
+        ("k8s_create_deployment", create_deployment, create_deployment.__doc__ or ""),
+        ("k8s_scale_deployment", scale_deployment, scale_deployment.__doc__ or ""),
+        ("k8s_delete_deployment", delete_deployment, delete_deployment.__doc__ or ""),
+        ("k8s_delete_pod", delete_pod, delete_pod.__doc__ or ""),
+        ("k8s_diagnose_cluster", diagnose_cluster, diagnose_cluster.__doc__ or ""),
+        ("k8s_run_diagnostics", run_diagnostics, run_diagnostics.__doc__ or ""),
     ]
+
+    tools: List[BaseTool] = []
+    for name, fn, description in tool_specs:
+        if allowed is not None and name not in allowed:
+            continue
+        tools.append(wrap(fn, name=name, description=description))
+    return tools
+
+
+def _extract_answer(payload: Dict[str, Any]) -> str:
+    answer = payload.get("output")
+    if answer:
+        return answer
+    messages = payload.get("messages", [])
+    for message in reversed(messages):
+        if isinstance(message, AIMessage):
+            content = message.content
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                parts = [
+                    chunk.get("text")
+                    for chunk in content
+                    if isinstance(chunk, dict) and chunk.get("type") == "text"
+                ]
+                if parts:
+                    return "\n".join(filter(None, parts))
+        if isinstance(message, dict) and message.get("role") == "assistant":
+            assistant_content = message.get("content")
+            if isinstance(assistant_content, str):
+                return assistant_content
+    raise RuntimeError("Diagnostics worker returned no output.")
+
+
+def _get_diagnostics_agent():
+    global _DIAGNOSTICS_AGENT
+    if _DIAGNOSTICS_AGENT is None:
+        diag_model = os.getenv("DIAGNOSTICS_MODEL")
+        tools = list(_build_tools(allowed_names=DIAGNOSTICS_TOOL_ALLOWLIST))
+        _DIAGNOSTICS_AGENT = create_agent(
+            model=_build_llm(diag_model),
+            tools=tools,
+            system_prompt=DIAGNOSTICS_SYSTEM_PROMPT,
+            checkpointer=DIAGNOSTICS_CHECKPOINTER,
+        )
+    return _DIAGNOSTICS_AGENT
+
+
+def _run_diagnostics_worker(
+    goal: str,
+    namespace: Optional[str],
+    workload: Optional[str],
+    include_logs: bool,
+    max_pods: int,
+) -> str:
+    clean_goal = (goal or "").strip()
+    if not clean_goal:
+        raise ValueError("goal is required for diagnostics")
+    if max_pods <= 0:
+        raise ValueError("max_pods must be a positive integer")
+
+    worker = _get_diagnostics_agent()
+    focus_namespace = namespace.strip() if namespace else "all namespaces"
+    focus_workload = workload.strip() if workload else "any workload"
+    lines = [
+        f"Goal: {clean_goal}",
+        f"Namespace focus: {focus_namespace}",
+        f"Workload focus: {focus_workload}",
+        f"Collect logs: {'yes' if include_logs else 'no'}",
+        f"Max pods for deep inspection: {max_pods}",
+        "Follow the diagnostics workflow and return the summary plus structured JSON.",
+    ]
+    config = {"configurable": {"thread_id": f"diag-{uuid4()}"}}
+    result = worker.invoke({"messages": [HumanMessage(content="\n".join(lines))]}, config=config)
+    return _extract_answer(result)
 
 
 SYSTEM_PROMPT = """You are the Supervisor agent. Plan briefly, then call tools.
@@ -200,19 +324,8 @@ SYSTEM_PROMPT = """You are the Supervisor agent. Plan briefly, then call tools.
 
 def build_agent_v1() -> Any:
     """Create the LangChain agent wired up with MCP-backed tools."""
-    model_spec = os.getenv("MODEL", "ollama:gpt-oss:20b")
     tools = list(_build_tools())
-    llm = model_spec
-    if model_spec.startswith("ollama:"):
-        if ChatOllama is None:
-            raise RuntimeError(
-                "MODEL is set to an Ollama backend but langchain_ollama is not installed. "
-                "Install with `pip install langchain-ollama`."
-            )
-        _, _, remaining = model_spec.partition(":")
-        model_name = remaining or "ollama:gpt-oss:20b"
-        base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
-        llm = ChatOllama(model=model_name, base_url=base_url)
+    llm = _build_llm()
     return create_agent(
         model=llm,
         tools=tools,

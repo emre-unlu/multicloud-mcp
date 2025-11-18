@@ -10,7 +10,9 @@ from . import (
     delete_deployment,
     delete_pod,
     list_namespaces,
+    list_nodes,
     list_pods,
+    pod_events,
     pod_logs,
     scale_deployment,
 )
@@ -20,8 +22,10 @@ if TYPE_CHECKING:
 
 _REGISTRARS: List[Callable[["FastMCP"], None]] = [
     list_namespaces.register,
+    list_nodes.register,
     list_pods.register,
     pod_logs.register,
+    pod_events.register,
     create_deployment.register,
     scale_deployment.register,
     diagnostics.register,
