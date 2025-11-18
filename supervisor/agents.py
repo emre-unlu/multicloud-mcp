@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Any, Dict, Iterable, List, Optional
 from uuid import uuid4
+
+logger = logging.getLogger(__name__)
 
 import requests
 from langchain.agents import create_agent
@@ -39,8 +42,8 @@ HITL_POLICY: Dict[str, Any] = {
     "k8s_pod_logs": False,
     "k8s_pod_events": False,
     "k8s_run_diagnostics": False,
-    "k8s_diagnose_cluster": {"allowed_decisions": ["approve", "reject"]},
-    "k8s_get_namespace": {"allowed_decisions": ["approve", "reject", "edit"]},
+    "k8s_diagnose_cluster": False,
+    "k8s_get_namespace": False,
 }
 
 DIAGNOSTICS_TOOL_ALLOWLIST = {
@@ -310,6 +313,7 @@ def _run_diagnostics_worker(
     ]
     config = {"configurable": {"thread_id": f"diag-{uuid4()}"}}
     result = worker.invoke({"messages": [HumanMessage(content="\n".join(lines))]}, config=config)
+    logger.info("[DIAG-AGENT] diagnose_cluster() called")
     return _extract_answer(result)
 
 

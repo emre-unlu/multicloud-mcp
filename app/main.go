@@ -16,8 +16,9 @@ type runReq struct {
 type runResp map[string]any // pass-through JSON
 
 func main() {
-	supervisorURL := "http://127.0.0.1:9000/run"
-	addr := ":8088"
+	supervisorURL := getenv("SUPERVISOR_URL", "http://127.0.0.1:9000/run")
+	addr := getenv("UI_ADDR", ":8088")
+	client := &http.Client{Timeout: supervisorTimeout()}
 
 	mux := http.NewServeMux()
 
@@ -55,7 +56,6 @@ func main() {
 		}
 		req.Header.Set("Content-Type", "application/json")
 
-		client := &http.Client{Timeout: 60 * time.Second}
 		resp, err := client.Do(req)
 		if err != nil {
 			http.Error(w, "upstream error (connect): "+err.Error(), http.StatusBadGateway)
@@ -98,6 +98,20 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func supervisorTimeout() time.Duration {
+	const fallback = 5 * time.Minute
+	val := getenv("SUPERVISOR_TIMEOUT", "5m")
+	d, err := time.ParseDuration(val)
+	if err != nil {
+		log.Printf("Invalid SUPERVISOR_TIMEOUT %q, defaulting to %s", val, fallback)
+		return fallback
+	}
+	if d <= 0 {
+		return 0
+	}
+	return d
 }
 func getenv(k, def string) string {
 	if v := os.Getenv(k); v != "" {
