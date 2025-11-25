@@ -15,12 +15,15 @@ if (-not $ollamaProc) {
     Start-Sleep -Seconds 3
 }
 
-# Pull the model only if it's not already present
-if (-not (ollama list | Select-String -Pattern '^gpt-oss:20b(\s|$)')) {
-    Write-Host "Model not found locally. Pulling gpt-oss:20b..." -ForegroundColor Yellow
-    ollama pull gpt-oss:20b
-} else {
-    Write-Host "Model gpt-oss:20b already present. Skipping pull." -ForegroundColor Green
+# Pull the models only if they're not already present
+$modelsToEnsure = @('mistral:7b', 'qwen3:8b')
+foreach ($model in $modelsToEnsure) {
+    if (-not (ollama list | Select-String -Pattern "^$model(\s|$)")) {
+        Write-Host "Model not found locally. Pulling $model..." -ForegroundColor Yellow
+        ollama pull $model
+    } else {
+        Write-Host "Model $model already present. Skipping pull." -ForegroundColor Green
+    }
 }
 
 # Start K8s MCP Server
@@ -36,7 +39,8 @@ Start-Process -WindowStyle Normal -FilePath "powershell" -ArgumentList "-Executi
 Write-Host "Starting Supervisor..." -ForegroundColor Yellow
 $supCmd = @"
 Set-Location '$RepoRoot'
-`$env:MODEL = 'ollama:gpt-oss:20b'
+`$env:MODEL = 'ollama:mistral:7b'
+`$env:DIAGNOSTICS_MODEL = 'ollama:qwen3:8b'
 & '${SupDir}\.venv\Scripts\uvicorn.exe' supervisor.app:app --reload --port 9000
 Read-Host "Press Enter to exit"
 "@

@@ -122,7 +122,7 @@ def _call_mcp_json(tool_name: str, **arguments: Any) -> str:
 
 
 def _build_llm(model_spec: Optional[str] = None) -> Any:
-    spec = model_spec or os.getenv("MODEL", "ollama:gpt-oss:20b")
+    spec = model_spec or os.getenv("MODEL", "ollama:mistral:7b")
     llm: Any = spec
     if spec.startswith("ollama:"):
         if ChatOllama is None:
@@ -131,7 +131,7 @@ def _build_llm(model_spec: Optional[str] = None) -> Any:
                 "Install with `pip install langchain-ollama`."
             )
         _, _, remaining = spec.partition(":")
-        model_name = remaining or "ollama:gpt-oss:20b"
+        model_name = remaining or "ollama:mistral:7b"
         base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
         llm = ChatOllama(model=model_name, base_url=base_url)
     return llm
@@ -279,7 +279,7 @@ def _extract_answer(payload: Dict[str, Any]) -> str:
 def _get_diagnostics_agent():
     global _DIAGNOSTICS_AGENT
     if _DIAGNOSTICS_AGENT is None:
-        diag_model = os.getenv("DIAGNOSTICS_MODEL", "ollama:gpt-oss:20b")
+        diag_model = os.getenv("DIAGNOSTICS_MODEL", "ollama:qwen3:8b")
         tools = list(_build_tools(allowed_names=DIAGNOSTICS_TOOL_ALLOWLIST))
         _DIAGNOSTICS_AGENT = create_agent(
             model=_build_llm(diag_model),
@@ -319,19 +319,22 @@ def _run_diagnostics_worker(
     logger.info("[DIAG-AGENT] diagnose_cluster() called")
     return _attach_worker_signatures(_extract_answer(result))
 
-SYSTEM_PROMPT = """You are the Supervisor agent. Plan briefly, then call tools.
-- Prefer read/list actions first.
-- Only delete resources after explicit human approval.
-- When creating/scaling, always specify namespace and replica count.
-- Use diagnostics to gather cluster health before risky operations.
-- If ambiguous, ask ONE short clarifying question.
-- Output concise results."""
+SYSTEM_PROMPT = """You are the Supervisor agent.
+
+You have direct access to tools. When the user asks about Kubernetes, you MUST
+call tools instead of showing example code.
+
+- Never answer with code like `k8s_list_namespaces()`.
+- Always actually CALL the tool and use its output to answer.
+- If you need clarity, ask ONE short question.
+- Be concise."""
 
 
 def build_agent_v1() -> Any:
     """Create the LangChain agent wired up with MCP-backed tools."""
     tools = list(_build_tools())
     llm = _build_llm()
+    logger.info("Supervisor LLM type: %r", llm)
     return create_agent(
         model=llm,
         tools=tools,
