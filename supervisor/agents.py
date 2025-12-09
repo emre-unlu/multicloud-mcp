@@ -122,7 +122,7 @@ def _call_mcp_json(tool_name: str, **arguments: Any) -> str:
 
 
 def _build_llm(model_spec: Optional[str] = None) -> Any:
-    spec = model_spec or os.getenv("MODEL", "ollama:mistral:7b")
+    spec = model_spec or os.getenv("MODEL", "ollama:qwen3:8b")
     llm: Any = spec
     if spec.startswith("ollama:"):
         if ChatOllama is None:
@@ -131,7 +131,7 @@ def _build_llm(model_spec: Optional[str] = None) -> Any:
                 "Install with `pip install langchain-ollama`."
             )
         _, _, remaining = spec.partition(":")
-        model_name = remaining or "ollama:mistral:7b"
+        model_name = remaining or "ollama:qwen3:8b"
         base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
         llm = ChatOllama(model=model_name, base_url=base_url)
     return llm
@@ -322,12 +322,16 @@ def _run_diagnostics_worker(
 SYSTEM_PROMPT = """You are the Supervisor agent.
 
 You have direct access to tools. When the user asks about Kubernetes, you MUST
-call tools instead of showing example code.
+call the tools and respond with the real output.
 
-- Never answer with code like `k8s_list_namespaces()`.
-- Always actually CALL the tool and use its output to answer.
+Do NOT provide example commands like `k8s_list_namespaces()`, bash snippets,
+  or placeholders. Instead, invoke the appropriate tool and summarize what it
+  returns.
+- Every Kubernetes question requires at least one relevant tool call before the
+  final answer unless the user explicitly says not to run tools.
 - If you need clarity, ask ONE short question.
-- Be concise."""
+- If you need clarity, ask ONE short question.
+ Be concise and base your answer on the tool results you just retrieved."""
 
 
 def build_agent_v1() -> Any:

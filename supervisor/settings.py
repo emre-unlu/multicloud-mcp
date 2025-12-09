@@ -2,7 +2,8 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
-MODEL = os.getenv("MODEL", "ollama:mistral:7b")
+MODEL = os.getenv("MODEL", "ollama:qwen3:8b")
+DIAGNOSTICS_MODEL=os.getenv("DIAGNOSTICS_MODEL", "ollama:qwen3:8b") 
 
 
 MCP_SERVERS = {
