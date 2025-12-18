@@ -159,7 +159,7 @@ def _build_tools(allowed_names: Optional[Iterable[str]] = None) -> Iterable[Base
         return _call_mcp_json("list_namespaces")
 
     def list_pods(namespace: str) -> str:
-        """List pod names in a namespace."""
+        """List pods in a namespace with phase/ready/restart details."""
         return _call_mcp_json("list_pods", namespace=namespace)
 
     def pod_events(namespace: str, pod: str) -> str:

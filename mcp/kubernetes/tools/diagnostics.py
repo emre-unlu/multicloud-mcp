@@ -337,6 +337,25 @@ class KubernetesDiagnostics:
             total = len(statuses)
             phase = pod.status.phase
 
+            container_details: List[Dict[str, Any]] = []
+            for status in statuses:
+                state_info = self._get_container_state(status.state)
+                container_details.append(
+                    {
+                        "name": status.name,
+                        "ready": status.ready,
+                        "restart_count": status.restart_count,
+                        "state": state_info,
+                    }
+                )
+
+                state = state_info.get("state")
+                reason = state_info.get("reason") or state_info.get("message")
+                if state in {"waiting", "terminated"} and reason:
+                    warnings.append(
+                        f"Pod {pod.metadata.name} container {status.name} state={state} reason={reason}"
+                    )
+
             if phase != "Running" or ready != total:
                 warnings.append(
                     f"Pod {pod.metadata.name} phase={phase} ready={ready}/{total} restarts={restarts}"
@@ -350,6 +369,7 @@ class KubernetesDiagnostics:
                     "restarts": restarts,
                     "node": pod.spec.node_name,
                     "age": pod.metadata.creation_timestamp.isoformat() if pod.metadata.creation_timestamp else None,
+                    "containers": container_details,
                 }
             )
 
