@@ -45,6 +45,11 @@ HITL_POLICY: Dict[str, Any] = {
     "k8s_pod_events": False,
     "k8s_run_diagnostics": False,
     "k8s_get_namespace": False,
+    "k8s_get_logs": False,
+    "k8s_get_metrics": False,
+    "k8s_get_traces": False,
+    "k8s_read_metrics": False,
+    "k8s_read_traces": False,
 }
 
 DIAGNOSTICS_TOOL_ALLOWLIST = {
@@ -53,6 +58,11 @@ DIAGNOSTICS_TOOL_ALLOWLIST = {
     "k8s_list_pods",
     "k8s_pod_events",
     "k8s_pod_logs",
+    "k8s_get_logs",
+    "k8s_get_metrics",
+    "k8s_get_traces",
+    "k8s_read_metrics",
+    "k8s_read_traces",
     
 }
 SUPERVISOR_TOOL_DENYLIST = {
@@ -60,16 +70,38 @@ SUPERVISOR_TOOL_DENYLIST = {
 }
 
 DIAGNOSTICS_SYSTEM_PROMPT = """You are the Kubernetes diagnostics worker agent.
-You only have read-only access to Kubernetes MCP tools. Follow this workflow:
+You only have read-only access to Kubernetes MCP tools.
+
+== Available Tools ==
+- k8s_list_nodes(): Returns node readiness and status details.
+- k8s_list_namespaces(): Returns cluster namespaces.
+- k8s_list_pods(namespace): Returns pods with phase, ready, and restart details.
+- k8s_pod_events(namespace, pod): Returns recent events for a pod.
+- k8s_pod_logs(namespace, pod, tail_lines=80): Returns recent pod logs.
+- k8s_get_logs(namespace, service): Returns log data for pods behind a service label selector.
+- k8s_get_metrics(namespace, duration): Collects Prometheus metrics and returns a directory path
+  containing CSV files.
+- k8s_read_metrics(file_path): Reads a metrics CSV file and returns its contents as text.
+- k8s_get_traces(namespace, duration): Collects Jaeger traces and returns a directory path containing traces.csv.
+- k8s_read_traces(file_path): Reads a traces CSV file and returns its contents as text.
+
+== Intended Usage ==
+- Use k8s_get_logs for service-level logs; use k8s_pod_logs for specific pods after narrowing scope.
+- When metrics or traces are requested, call k8s_get_metrics / k8s_get_traces first, then use
+  k8s_read_metrics / k8s_read_traces to inspect the CSV output.
+- Always ground conclusions in tool output. If data is missing or a tool fails, report that explicitly.
+
+== Workflow ==
 1. Understand the requested scope (cluster, namespace, workload) and key symptoms.
 2. List cluster nodes and verify Ready status.
 3. Enumerate namespaces/pods in scope. Focus on pods that are Pending, CrashLoopBackOff,
    ImagePullBackOff, Error, Terminating, or repeatedly restarting.
 4. Inspect events and, when requested, recent logs for a handful of the most relevant
    problematic pods (respect the max pods hint).
-5. Summarize the findings, highlighting node issues, namespace-wide problems, or
+5. When requested, review metrics/traces to corroborate failures or anomalies.
+6. Summarize the findings, highlighting node issues, namespace-wide problems, or
    workload-specific failures.
-6. Provide concrete recommendations tied to the issues discovered.
+7. Provide concrete recommendations tied to the issues discovered.
 
 Always produce a final answer that contains:
 - A human readable summary section with concise bullet points.
@@ -170,6 +202,26 @@ def _build_tools(allowed_names: Optional[Iterable[str]] = None) -> Iterable[Base
         """Get recent pod logs."""
         return _call_mcp_json("pod_logs", namespace=namespace, pod=pod, tail_lines=tail_lines)
 
+    def get_logs(namespace: str, service: str) -> str:
+        """Collect service logs for pods selected by the service."""
+        return _call_mcp_json("get_logs", namespace=namespace, service=service)
+
+    def get_metrics(namespace: str, duration: int = 5) -> str:
+        """Collect Prometheus metrics and return the output directory."""
+        return _call_mcp_json("get_metrics", namespace=namespace, duration=duration)
+
+    def get_traces(namespace: str, duration: int = 5) -> str:
+        """Collect Jaeger traces and return the output directory."""
+        return _call_mcp_json("get_traces", namespace=namespace, duration=duration)
+
+    def read_metrics(file_path: str) -> str:
+        """Read metrics from a CSV file path."""
+        return _call_mcp_json("read_metrics", file_path=file_path)
+
+    def read_traces(file_path: str) -> str:
+        """Read traces from a CSV file path."""
+        return _call_mcp_json("read_traces", file_path=file_path)
+
     def create_deployment(namespace: str, name: str, image: str = "nginx", replicas: int = 1) -> str:
         """Create a small deployment."""
         return _call_mcp_json(
@@ -230,6 +282,11 @@ def _build_tools(allowed_names: Optional[Iterable[str]] = None) -> Iterable[Base
         ("k8s_list_pods", list_pods, list_pods.__doc__ or ""),
         ("k8s_pod_events", pod_events, pod_events.__doc__ or ""),
         ("k8s_pod_logs", pod_logs, pod_logs.__doc__ or ""),
+        ("k8s_get_logs", get_logs, get_logs.__doc__ or ""),
+        ("k8s_get_metrics", get_metrics, get_metrics.__doc__ or ""),
+        ("k8s_get_traces", get_traces, get_traces.__doc__ or ""),
+        ("k8s_read_metrics", read_metrics, read_metrics.__doc__ or ""),
+        ("k8s_read_traces", read_traces, read_traces.__doc__ or ""),
         ("k8s_create_deployment", create_deployment, create_deployment.__doc__ or ""),
         ("k8s_scale_deployment", scale_deployment, scale_deployment.__doc__ or ""),
         ("k8s_delete_deployment", delete_deployment, delete_deployment.__doc__ or ""),
